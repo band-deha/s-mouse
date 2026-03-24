@@ -1,5 +1,6 @@
 #include "server.h"
 #include <iostream>
+#include <sstream>
 
 namespace smouse {
 
@@ -7,6 +8,20 @@ Server::Server() = default;
 
 Server::~Server() {
     stop();
+}
+
+void Server::log(const std::string& message) {
+    std::cout << message << std::endl;
+    if (log_callback_) log_callback_(message);
+}
+
+std::vector<std::pair<std::string, std::string>> Server::get_clients() const {
+    std::vector<std::pair<std::string, std::string>> result;
+    std::lock_guard lock(clients_mutex_);
+    for (const auto& [id, client] : clients_) {
+        result.emplace_back(id, client->name);
+    }
+    return result;
 }
 
 bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
@@ -18,6 +33,7 @@ bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
     clipboard_monitor_ = create_clipboard_monitor();
 
     if (!input_capture_ || !screen_query_) {
+        log("[Server] Failed to create platform components");
         return false;
     }
 
@@ -27,6 +43,9 @@ bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
         for (const auto& d : displays) {
             if (d.is_primary) {
                 layout_.set_server_screen({d.x, d.y, d.width, d.height});
+                std::ostringstream oss;
+                oss << "[Server] Primary display: " << d.width << "x" << d.height;
+                log(oss.str());
                 break;
             }
         }
@@ -36,11 +55,13 @@ bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
     if (!tcp_server_.listen(tcp_port, [this](TcpConnection conn, std::string peer) {
         on_client_connected(std::move(conn), std::move(peer));
     })) {
+        log("[Server] Failed to start TCP server on port " + std::to_string(tcp_port));
         return false;
     }
 
     // Start UDP channel
     if (!udp_channel_.bind(udp_port)) {
+        log("[Server] Failed to bind UDP port " + std::to_string(udp_port));
         tcp_server_.stop();
         return false;
     }
@@ -49,6 +70,7 @@ bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
     if (!input_capture_->start([this](Message msg) {
         on_input_event(std::move(msg));
     })) {
+        log("[Server] Failed to start input capture");
         tcp_server_.stop();
         udp_channel_.close();
         return false;
@@ -67,6 +89,7 @@ bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
     keepalive_thread_ = std::thread(&Server::keepalive_loop, this);
 
     state_ = ServerState::LOCAL_ACTIVE;
+    log("[Server] Started on TCP:" + std::to_string(tcp_port) + " UDP:" + std::to_string(udp_port));
     return true;
 }
 
@@ -85,6 +108,7 @@ void Server::stop() {
 
     std::lock_guard lock(clients_mutex_);
     clients_.clear();
+    log("[Server] Stopped");
 }
 
 void Server::on_client_connected(TcpConnection conn, std::string peer_addr) {
@@ -120,7 +144,7 @@ void Server::on_client_connected(TcpConnection conn, std::string peer_addr) {
         clients_[client_id] = std::move(client);
     }
 
-    std::cout << "[Server] Client connected: " << peer_addr << std::endl;
+    log("[Server] Client connected: " + peer_addr);
 }
 
 void Server::on_client_message(const std::string& client_id, Message msg) {
@@ -139,12 +163,22 @@ void Server::on_client_message(const std::string& client_id, Message msg) {
         client.screen.client_id = client_id;
         client.screen.rect = {0, 0, hello.screen_w, hello.screen_h};
 
+        // Add client to layout
+        layout_.add_client(client.screen);
+
         // Send ACK
         auto ack = make_message(HelloAck{PROTOCOL_VERSION, 1});
         client.tcp.send(ack);
 
-        std::cout << "[Server] Client hello: " << hello.name
-                  << " (" << hello.screen_w << "x" << hello.screen_h << ")" << std::endl;
+        std::ostringstream oss;
+        oss << "[Server] Client hello: " << hello.name
+            << " (" << hello.screen_w << "x" << hello.screen_h << ")";
+        log(oss.str());
+
+        // Notify state callback so GUI can update screen arrangement
+        if (state_callback_) {
+            state_callback_(state_, client_id);
+        }
         break;
     }
     case MessageType::KEEPALIVE:
@@ -162,9 +196,14 @@ void Server::on_client_disconnected(const std::string& client_id) {
     bool was_active = (state_ == ServerState::CLIENT_ACTIVE &&
                        active_client_id_ == client_id);
 
+    std::string name;
     {
         std::lock_guard lock(clients_mutex_);
-        clients_.erase(client_id);
+        auto it = clients_.find(client_id);
+        if (it != clients_.end()) {
+            name = it->second->name;
+            clients_.erase(it);
+        }
     }
 
     layout_.remove_client(client_id);
@@ -173,7 +212,12 @@ void Server::on_client_disconnected(const std::string& client_id) {
         transition_to_local();
     }
 
-    std::cout << "[Server] Client disconnected: " << client_id << std::endl;
+    log("[Server] Client disconnected: " + (name.empty() ? client_id : name));
+
+    // Notify GUI
+    if (state_callback_) {
+        state_callback_(state_, client_id);
+    }
 }
 
 void Server::on_input_event(Message msg) {
@@ -249,7 +293,7 @@ void Server::transition_to_client(const std::string& client_id) {
         state_callback_(ServerState::CLIENT_ACTIVE, client_id);
     }
 
-    std::cout << "[Server] Switched to client: " << client.name << std::endl;
+    log("[Server] Switched to client: " + client.name);
 }
 
 void Server::transition_to_local() {
@@ -274,7 +318,7 @@ void Server::transition_to_local() {
         state_callback_(ServerState::LOCAL_ACTIVE, "");
     }
 
-    std::cout << "[Server] Switched to local" << std::endl;
+    log("[Server] Switched to local");
 }
 
 void Server::send_to_active_client(const Message& msg) {
@@ -313,15 +357,13 @@ void Server::keepalive_loop() {
                 it = clients_.erase(it);
 
                 if (was_active) {
-                    // Need to unlock before transition
-                    // For simplicity, just update state directly here
                     if (input_capture_) input_capture_->set_suppress(false);
                     active_client_id_.clear();
                     state_ = ServerState::LOCAL_ACTIVE;
                     if (state_callback_) {
                         state_callback_(ServerState::LOCAL_ACTIVE, "");
                     }
-                    std::cout << "[Server] Client timed out: " << cid << std::endl;
+                    log("[Server] Client timed out: " + cid);
                 }
             } else {
                 // Send keepalive

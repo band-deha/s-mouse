@@ -1,18 +1,12 @@
 #include "tcp_connection.h"
 
-#include <arpa/inet.h>
-#include <cerrno>
 #include <cstring>
-#include <netdb.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace smouse {
 
 // ---------- TcpConnection ----------
 
-TcpConnection::TcpConnection() = default;
+TcpConnection::TcpConnection() { ensure_winsock(); }
 
 TcpConnection::~TcpConnection() {
     close();
@@ -23,7 +17,7 @@ TcpConnection::TcpConnection(TcpConnection&& other) noexcept
     , connected_(other.connected_)
     , recv_thread_(std::move(other.recv_thread_))
     , running_(other.running_) {
-    other.fd_ = -1;
+    other.fd_ = SMOUSE_INVALID_SOCKET;
     other.connected_ = false;
     other.running_ = false;
 }
@@ -35,26 +29,29 @@ TcpConnection& TcpConnection::operator=(TcpConnection&& other) noexcept {
         connected_ = other.connected_;
         recv_thread_ = std::move(other.recv_thread_);
         running_ = other.running_;
-        other.fd_ = -1;
+        other.fd_ = SMOUSE_INVALID_SOCKET;
         other.connected_ = false;
         other.running_ = false;
     }
     return *this;
 }
 
-TcpConnection TcpConnection::from_fd(int fd) {
+TcpConnection TcpConnection::from_fd(SMOUSE_SOCKET fd) {
     TcpConnection conn;
     conn.fd_ = fd;
     conn.connected_ = true;
 
     // Set TCP_NODELAY for low latency
     int flag = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
+               reinterpret_cast<const char*>(&flag), sizeof(flag));
 
     return conn;
 }
 
 bool TcpConnection::connect(const std::string& host, uint16_t port) {
+    ensure_winsock();
+
     struct addrinfo hints{}, *res = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -65,14 +62,14 @@ bool TcpConnection::connect(const std::string& host, uint16_t port) {
     }
 
     fd_ = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd_ < 0) {
+    if (fd_ == SMOUSE_INVALID_SOCKET) {
         freeaddrinfo(res);
         return false;
     }
 
-    if (::connect(fd_, res->ai_addr, res->ai_addrlen) < 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (::connect(fd_, res->ai_addr, static_cast<int>(res->ai_addrlen)) != 0) {
+        net_close(fd_);
+        fd_ = SMOUSE_INVALID_SOCKET;
         freeaddrinfo(res);
         return false;
     }
@@ -81,7 +78,8 @@ bool TcpConnection::connect(const std::string& host, uint16_t port) {
 
     // Set TCP_NODELAY
     int flag = 1;
-    setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY,
+               reinterpret_cast<const char*>(&flag), sizeof(flag));
 
     connected_ = true;
     return true;
@@ -113,11 +111,11 @@ bool TcpConnection::is_connected() const {
 }
 
 std::string TcpConnection::peer_address() const {
-    if (fd_ < 0) return "";
+    if (fd_ == SMOUSE_INVALID_SOCKET) return "";
 
     struct sockaddr_in addr{};
     socklen_t len = sizeof(addr);
-    if (getpeername(fd_, reinterpret_cast<struct sockaddr*>(&addr), &len) < 0) {
+    if (getpeername(fd_, reinterpret_cast<struct sockaddr*>(&addr), &len) != 0) {
         return "";
     }
 
@@ -170,7 +168,8 @@ void TcpConnection::recv_loop(MessageCallback on_message, DisconnectCallback on_
 bool TcpConnection::send_raw(const uint8_t* data, size_t len) {
     size_t sent = 0;
     while (sent < len) {
-        ssize_t n = ::send(fd_, data + sent, len - sent, MSG_NOSIGNAL);
+        int n = ::send(fd_, reinterpret_cast<const char*>(data + sent),
+                       static_cast<int>(len - sent), MSG_NOSIGNAL);
         if (n <= 0) {
             connected_ = false;
             return false;
@@ -183,7 +182,8 @@ bool TcpConnection::send_raw(const uint8_t* data, size_t len) {
 bool TcpConnection::recv_exact(uint8_t* buf, size_t len) {
     size_t received = 0;
     while (received < len && running_) {
-        ssize_t n = ::recv(fd_, buf + received, len - received, 0);
+        int n = ::recv(fd_, reinterpret_cast<char*>(buf + received),
+                       static_cast<int>(len - received), 0);
         if (n <= 0) return false;
         received += static_cast<size_t>(n);
     }
@@ -191,43 +191,46 @@ bool TcpConnection::recv_exact(uint8_t* buf, size_t len) {
 }
 
 void TcpConnection::close_fd() {
-    if (fd_ >= 0) {
-        ::shutdown(fd_, SHUT_RDWR);
-        ::close(fd_);
-        fd_ = -1;
+    if (fd_ != SMOUSE_INVALID_SOCKET) {
+        net_shutdown(fd_);
+        net_close(fd_);
+        fd_ = SMOUSE_INVALID_SOCKET;
     }
 }
 
 // ---------- TcpServer ----------
 
-TcpServer::TcpServer() = default;
+TcpServer::TcpServer() { ensure_winsock(); }
 
 TcpServer::~TcpServer() {
     stop();
 }
 
 bool TcpServer::listen(uint16_t port, AcceptCallback on_accept) {
+    ensure_winsock();
+
     listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd_ < 0) return false;
+    if (listen_fd_ == SMOUSE_INVALID_SOCKET) return false;
 
     // Allow address reuse
     int opt = 1;
-    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&opt), sizeof(opt));
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    if (::bind(listen_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        ::close(listen_fd_);
-        listen_fd_ = -1;
+    if (::bind(listen_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        net_close(listen_fd_);
+        listen_fd_ = SMOUSE_INVALID_SOCKET;
         return false;
     }
 
-    if (::listen(listen_fd_, 5) < 0) {
-        ::close(listen_fd_);
-        listen_fd_ = -1;
+    if (::listen(listen_fd_, 5) != 0) {
+        net_close(listen_fd_);
+        listen_fd_ = SMOUSE_INVALID_SOCKET;
         return false;
     }
 
@@ -238,10 +241,10 @@ bool TcpServer::listen(uint16_t port, AcceptCallback on_accept) {
 
 void TcpServer::stop() {
     running_ = false;
-    if (listen_fd_ >= 0) {
-        ::shutdown(listen_fd_, SHUT_RDWR);
-        ::close(listen_fd_);
-        listen_fd_ = -1;
+    if (listen_fd_ != SMOUSE_INVALID_SOCKET) {
+        net_shutdown(listen_fd_);
+        net_close(listen_fd_);
+        listen_fd_ = SMOUSE_INVALID_SOCKET;
     }
     if (accept_thread_.joinable()) {
         accept_thread_.join();
@@ -257,10 +260,10 @@ void TcpServer::accept_loop(AcceptCallback on_accept) {
         struct sockaddr_in client_addr{};
         socklen_t addr_len = sizeof(client_addr);
 
-        int client_fd = ::accept(listen_fd_,
+        SMOUSE_SOCKET client_fd = ::accept(listen_fd_,
             reinterpret_cast<struct sockaddr*>(&client_addr), &addr_len);
 
-        if (client_fd < 0) {
+        if (client_fd == SMOUSE_INVALID_SOCKET) {
             if (!running_) break;
             continue;
         }

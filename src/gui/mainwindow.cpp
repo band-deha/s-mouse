@@ -10,20 +10,48 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QDateTime>
+#include <QNetworkInterface>
+#include <QScrollBar>
 
 namespace smouse {
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
     setWindowTitle("S-Mouse");
-    setMinimumSize(600, 400);
+    setMinimumSize(700, 500);
     setup_ui();
     create_menus();
+
+    // Thread-safe log signal
+    QObject::connect(this, &MainWindow::log_message_received,
+                     this, &MainWindow::append_log, Qt::QueuedConnection);
+    QObject::connect(this, &MainWindow::client_list_changed,
+                     this, &MainWindow::refresh_screen_editor, Qt::QueuedConnection);
 }
 
 MainWindow::~MainWindow() {
     if (server_) server_->stop();
     if (client_) client_->disconnect();
+}
+
+QString MainWindow::get_lan_ip() {
+    const auto interfaces = QNetworkInterface::allInterfaces();
+    for (const auto& iface : interfaces) {
+        if (iface.flags().testFlag(QNetworkInterface::IsUp) &&
+            iface.flags().testFlag(QNetworkInterface::IsRunning) &&
+            !iface.flags().testFlag(QNetworkInterface::IsLoopBack)) {
+            const auto entries = iface.addressEntries();
+            for (const auto& entry : entries) {
+                auto addr = entry.ip();
+                if (addr.protocol() == QAbstractSocket::IPv4Protocol &&
+                    !addr.isLoopback()) {
+                    return addr.toString();
+                }
+            }
+        }
+    }
+    return "127.0.0.1";
 }
 
 void MainWindow::setup_ui() {
@@ -34,21 +62,23 @@ void MainWindow::setup_ui() {
 
     // Connection group
     auto* conn_group = new QGroupBox("Connection", this);
-    auto* conn_layout = new QHBoxLayout(conn_group);
+    auto* conn_layout = new QVBoxLayout(conn_group);
+
+    auto* conn_row1 = new QHBoxLayout();
 
     mode_combo_ = new QComboBox(this);
     mode_combo_->addItem("Server");
     mode_combo_->addItem("Client");
-    conn_layout->addWidget(mode_combo_);
+    conn_row1->addWidget(mode_combo_);
 
     host_edit_ = new QLineEdit("127.0.0.1", this);
     host_edit_->setPlaceholderText("Server IP address");
-    conn_layout->addWidget(host_edit_);
+    conn_row1->addWidget(host_edit_);
 
     port_spin_ = new QSpinBox(this);
     port_spin_->setRange(1024, 65535);
     port_spin_->setValue(DEFAULT_TCP_PORT);
-    conn_layout->addWidget(port_spin_);
+    conn_row1->addWidget(port_spin_);
 
     connect_btn_ = new QPushButton("Start", this);
     connect(connect_btn_, &QPushButton::clicked, this, [this]() {
@@ -58,26 +88,51 @@ void MainWindow::setup_ui() {
             on_connect_client();
         }
     });
-    conn_layout->addWidget(connect_btn_);
+    conn_row1->addWidget(connect_btn_);
 
     disconnect_btn_ = new QPushButton("Stop", this);
     disconnect_btn_->setEnabled(false);
     connect(disconnect_btn_, &QPushButton::clicked, this, &MainWindow::on_disconnect);
-    conn_layout->addWidget(disconnect_btn_);
+    conn_row1->addWidget(disconnect_btn_);
+
+    conn_layout->addLayout(conn_row1);
+
+    // LAN IP display row
+    auto* ip_row = new QHBoxLayout();
+    ip_label_ = new QLabel(this);
+    ip_label_->setStyleSheet("color: #888; font-size: 11px;");
+    ip_label_->setText("LAN IP: " + get_lan_ip());
+    ip_row->addWidget(ip_label_);
+    ip_row->addStretch();
+    conn_layout->addLayout(ip_row);
 
     main_layout->addWidget(conn_group);
 
     // Mode toggle
     connect(mode_combo_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        host_edit_->setEnabled(index == 1);  // Only show host for client mode
+        host_edit_->setEnabled(index == 1);
         connect_btn_->setText(index == 0 ? "Start Server" : "Connect");
     });
     host_edit_->setEnabled(false);
     connect_btn_->setText("Start Server");
 
-    // Screen layout editor
+    // Tabbed area: Screen Layout + Log
+    tab_widget_ = new QTabWidget(this);
+
+    // Screen layout editor tab
     screen_editor_ = new ScreenEditor(this);
-    main_layout->addWidget(screen_editor_, 1);
+    tab_widget_->addTab(screen_editor_, "Screen Arrangement");
+
+    // Log tab
+    log_view_ = new QTextEdit(this);
+    log_view_->setReadOnly(true);
+    log_view_->setFont(QFont("Consolas", 9));
+    log_view_->setStyleSheet(
+        "QTextEdit { background-color: #1e1e1e; color: #d4d4d4; }"
+    );
+    tab_widget_->addTab(log_view_, "Event Log");
+
+    main_layout->addWidget(tab_widget_, 1);
 
     // Status bar
     status_label_ = new QLabel("Disconnected", this);
@@ -97,8 +152,60 @@ void MainWindow::create_menus() {
     connect(quit_action, &QAction::triggered, this, &QWidget::close);
 }
 
+void MainWindow::append_log(const QString& msg) {
+    QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss.zzz");
+    QString colored;
+
+    // Color-code log messages
+    if (msg.contains("[Server]")) {
+        colored = QString("<span style='color:#569cd6'>%1</span> <span style='color:#4ec9b0'>%2</span>")
+                      .arg(timestamp, msg.toHtmlEscaped());
+    } else if (msg.contains("[Client]")) {
+        colored = QString("<span style='color:#569cd6'>%1</span> <span style='color:#dcdcaa'>%2</span>")
+                      .arg(timestamp, msg.toHtmlEscaped());
+    } else {
+        colored = QString("<span style='color:#569cd6'>%1</span> <span style='color:#d4d4d4'>%2</span>")
+                      .arg(timestamp, msg.toHtmlEscaped());
+    }
+
+    log_view_->append(colored);
+
+    // Auto-scroll to bottom
+    auto* sb = log_view_->verticalScrollBar();
+    sb->setValue(sb->maximum());
+}
+
+void MainWindow::refresh_screen_editor() {
+    if (!server_) return;
+
+    screen_editor_->clear();
+
+    auto clients = server_->get_clients();
+    for (const auto& [id, name] : clients) {
+        auto info = server_->layout().get_client(id);
+        if (info) {
+            screen_editor_->add_client_screen(
+                QString::fromStdString(name.empty() ? id : name),
+                QString::fromStdString(id),
+                static_cast<int>(info->rect.width),
+                static_cast<int>(info->rect.height));
+        }
+    }
+
+    // Switch to screen arrangement tab when clients connect
+    if (!clients.empty()) {
+        tab_widget_->setCurrentIndex(0);
+    }
+}
+
 void MainWindow::on_start_server() {
     server_ = std::make_unique<Server>();
+
+    // Set up log callback
+    server_->set_log_callback([this](const std::string& msg) {
+        emit log_message_received(QString::fromStdString(msg));
+    });
+
     server_->set_state_callback([this](ServerState state, const std::string& client_id) {
         QString status;
         switch (state) {
@@ -115,6 +222,9 @@ void MainWindow::on_start_server() {
         QMetaObject::invokeMethod(this, [this, status]() {
             update_status(status);
         }, Qt::QueuedConnection);
+
+        // Refresh screen editor when client list changes
+        emit client_list_changed();
     });
 
     uint16_t port = static_cast<uint16_t>(port_spin_->value());
@@ -123,12 +233,19 @@ void MainWindow::on_start_server() {
         connect_btn_->setEnabled(false);
         disconnect_btn_->setEnabled(true);
         mode_combo_->setEnabled(false);
-        update_status(QString("Server listening on port %1").arg(port));
+
+        QString lan_ip = get_lan_ip();
+        ip_label_->setText(QString("Listening on %1:%2").arg(lan_ip).arg(port));
+        ip_label_->setStyleSheet("color: #4ec9b0; font-size: 11px; font-weight: bold;");
+        update_status(QString("Server listening on %1:%2").arg(lan_ip).arg(port));
+
+        // Switch to log tab to show startup events
+        tab_widget_->setCurrentIndex(1);
     } else {
         QMessageBox::critical(this, "Error",
             "Failed to start server.\n"
-            "Make sure Accessibility permission is enabled in\n"
-            "System Settings > Privacy & Security > Accessibility");
+            "Make sure the port is not in use and\n"
+            "Accessibility permission is enabled.");
         server_.reset();
     }
 }
@@ -137,6 +254,12 @@ void MainWindow::on_connect_client() {
     client_ = std::make_unique<Client>();
     client_->set_name("s-mouse-gui");
     client_->set_auto_reconnect(true);
+
+    // Set up log callback
+    client_->set_log_callback([this](const std::string& msg) {
+        emit log_message_received(QString::fromStdString(msg));
+    });
+
     client_->set_state_callback([this](ClientState state) {
         QString status;
         switch (state) {
@@ -160,6 +283,9 @@ void MainWindow::on_connect_client() {
         mode_combo_->setEnabled(false);
         host_edit_->setEnabled(false);
         update_status(QString("Connected to %1:%2").arg(host_edit_->text()).arg(port));
+
+        // Switch to log tab
+        tab_widget_->setCurrentIndex(1);
     } else {
         QMessageBox::critical(this, "Error",
             QString("Failed to connect to %1:%2").arg(host_edit_->text()).arg(port));
@@ -181,7 +307,10 @@ void MainWindow::on_disconnect() {
     disconnect_btn_->setEnabled(false);
     mode_combo_->setEnabled(true);
     host_edit_->setEnabled(mode_combo_->currentIndex() == 1);
+    ip_label_->setText("LAN IP: " + get_lan_ip());
+    ip_label_->setStyleSheet("color: #888; font-size: 11px;");
     update_status("Disconnected");
+    screen_editor_->clear();
 }
 
 void MainWindow::on_settings() {

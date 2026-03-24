@@ -62,6 +62,13 @@ public:
     using StateCallback = std::function<void(ServerState state, const std::string& client_id)>;
     void set_state_callback(StateCallback cb) { state_callback_ = std::move(cb); }
 
+    // Log callback for GUI
+    using LogCallback = std::function<void(const std::string& message)>;
+    void set_log_callback(LogCallback cb) { log_callback_ = std::move(cb); }
+
+    // Get connected client list
+    std::vector<std::pair<std::string, std::string>> get_clients() const;
+
     bool is_running() const { return running_; }
 
 private:
@@ -86,13 +93,16 @@ private:
     std::atomic<ServerState> state_{ServerState::LOCAL_ACTIVE};
     std::string active_client_id_;
 
-    std::mutex clients_mutex_;
+    mutable std::mutex clients_mutex_;
     std::unordered_map<std::string, std::unique_ptr<ClientConnection>> clients_;
 
     std::thread keepalive_thread_;
     std::atomic<bool> running_{false};
 
     StateCallback state_callback_;
+    LogCallback log_callback_;
+
+    void log(const std::string& message);
 };
 
 } // namespace smouse

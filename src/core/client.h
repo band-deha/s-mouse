@@ -47,6 +47,10 @@ public:
     // Enable auto-reconnect
     void set_auto_reconnect(bool enable) { auto_reconnect_ = enable; }
 
+    // Log callback for GUI
+    using LogCallback = std::function<void(const std::string& message)>;
+    void set_log_callback(LogCallback cb) { log_callback_ = std::move(cb); }
+
     bool is_connected() const {
         return state_ == ClientState::CONNECTED || state_ == ClientState::ACTIVE;
     }
@@ -78,6 +82,9 @@ private:
     std::thread keepalive_thread_;
 
     StateCallback state_callback_;
+    LogCallback log_callback_;
+
+    void log(const std::string& message);
 };
 
 } // namespace smouse

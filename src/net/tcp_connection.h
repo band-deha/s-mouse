@@ -1,5 +1,6 @@
 #pragma once
 
+#include "net_compat.h"
 #include "protocol.h"
 #include <cstdint>
 #include <functional>
@@ -31,7 +32,7 @@ public:
     TcpConnection& operator=(TcpConnection&& other) noexcept;
 
     // Create from existing socket fd (used by server after accept)
-    static TcpConnection from_fd(int fd);
+    static TcpConnection from_fd(SMOUSE_SOCKET fd);
 
     // Connect to a server
     bool connect(const std::string& host, uint16_t port);
@@ -51,7 +52,7 @@ public:
     std::string peer_address() const;
 
 private:
-    int fd_ = -1;
+    SMOUSE_SOCKET fd_ = SMOUSE_INVALID_SOCKET;
     bool connected_ = false;
     std::thread recv_thread_;
     std::mutex send_mutex_;
@@ -80,7 +81,7 @@ public:
     bool is_listening() const;
 
 private:
-    int listen_fd_ = -1;
+    SMOUSE_SOCKET listen_fd_ = SMOUSE_INVALID_SOCKET;
     std::thread accept_thread_;
     bool running_ = false;
 

@@ -35,7 +35,7 @@ void ScreenEditor::add_client_screen(const QString& name, const QString& client_
     // Place to the right of the rightmost screen
     int max_right = 0;
     for (const auto& s : screens_) {
-        max_right = std::max(max_right, s.rect.right());
+        max_right = (std::max)(max_right, s.rect.right());
     }
 
     ScreenItem item;
@@ -69,10 +69,10 @@ float ScreenEditor::scale() const {
     // Find bounding box of all screens
     int min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
     for (const auto& s : screens_) {
-        min_x = std::min(min_x, s.rect.left());
-        min_y = std::min(min_y, s.rect.top());
-        max_x = std::max(max_x, s.rect.right());
-        max_y = std::max(max_y, s.rect.bottom());
+        min_x = (std::min)(min_x, s.rect.left());
+        min_y = (std::min)(min_y, s.rect.top());
+        max_x = (std::max)(max_x, s.rect.right());
+        max_y = (std::max)(max_y, s.rect.bottom());
     }
 
     int total_w = max_x - min_x + 200;
@@ -80,7 +80,7 @@ float ScreenEditor::scale() const {
 
     float sx = static_cast<float>(width()) / total_w;
     float sy = static_cast<float>(height()) / total_h;
-    return std::min(sx, sy);
+    return (std::min)(sx, sy);
 }
 
 QPoint ScreenEditor::offset() const {
@@ -88,10 +88,10 @@ QPoint ScreenEditor::offset() const {
 
     int min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
     for (const auto& s : screens_) {
-        min_x = std::min(min_x, s.rect.left());
-        min_y = std::min(min_y, s.rect.top());
-        max_x = std::max(max_x, s.rect.right());
-        max_y = std::max(max_y, s.rect.bottom());
+        min_x = (std::min)(min_x, s.rect.left());
+        min_y = (std::min)(min_y, s.rect.top());
+        max_x = (std::max)(max_x, s.rect.right());
+        max_y = (std::max)(max_y, s.rect.bottom());
     }
 
     float s = scale();

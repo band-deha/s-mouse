@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Cross-platform mouse and keyboard sharing tool",
   "dependencies": [
-    "gtest"
+    "gtest",
+    "openssl"
   ]
 }

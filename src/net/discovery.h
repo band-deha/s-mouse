@@ -1,7 +1,9 @@
 #pragma once
 
+#include "net_compat.h"
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -40,7 +42,7 @@ private:
 
     std::thread thread_;
     std::atomic<bool> running_{false};
-    int fd_ = -1;
+    SMOUSE_SOCKET fd_ = SMOUSE_INVALID_SOCKET;
 
     mutable std::mutex servers_mutex_;
     std::vector<DiscoveredServer> servers_;

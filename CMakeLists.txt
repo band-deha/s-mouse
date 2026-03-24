@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
-project(s-mouse VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+
+if(APPLE)
+    project(s-mouse VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+else()
+    project(s-mouse VERSION 0.1.0 LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,11 +15,15 @@ option(SMOUSE_BUILD_TESTS "Build unit tests" ON)
 option(SMOUSE_BUILD_GUI "Build Qt6 GUI application" OFF)
 
 # Compiler warnings
-add_compile_options(
-    -Wall -Wextra -Wpedantic -Werror
-    $<$<CXX_COMPILER_ID:Clang>:-Wno-unused-parameter>
-    $<$<CXX_COMPILER_ID:GNU>:-Wno-unused-parameter>
-)
+if(MSVC)
+    add_compile_options(/W4)
+else()
+    add_compile_options(
+        -Wall -Wextra -Wpedantic -Werror
+        $<$<CXX_COMPILER_ID:Clang>:-Wno-unused-parameter>
+        $<$<CXX_COMPILER_ID:GNU>:-Wno-unused-parameter>
+    )
+endif()
 
 # Core library (platform-independent)
 add_subdirectory(src/core)

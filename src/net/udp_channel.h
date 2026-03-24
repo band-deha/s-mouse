@@ -1,13 +1,12 @@
 #pragma once
 
+#include "net_compat.h"
 #include "protocol.h"
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
-
-#include <netinet/in.h>
 
 namespace smouse {
 
@@ -43,10 +42,10 @@ public:
     // Stop receiving and close
     void close();
 
-    bool is_open() const { return fd_ >= 0; }
+    bool is_open() const { return fd_ != SMOUSE_INVALID_SOCKET; }
 
 private:
-    int fd_ = -1;
+    SMOUSE_SOCKET fd_ = SMOUSE_INVALID_SOCKET;
     std::thread recv_thread_;
     bool running_ = false;
     std::mutex send_mutex_;

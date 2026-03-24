@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 qt_standard_project_setup()
 
@@ -18,6 +18,7 @@ target_include_directories(smouse-gui PRIVATE
 
 target_link_libraries(smouse-gui PRIVATE
     Qt6::Widgets
+    Qt6::Network
     smouse_core
     smouse_net
     smouse_platform

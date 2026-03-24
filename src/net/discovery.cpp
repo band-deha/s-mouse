@@ -1,27 +1,27 @@
 #include "discovery.h"
 
-#include <arpa/inet.h>
 #include <cstring>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <algorithm>
 
 namespace smouse {
 
-Discovery::Discovery() = default;
+Discovery::Discovery() { ensure_winsock(); }
 
 Discovery::~Discovery() {
     stop();
 }
 
 bool Discovery::start_broadcasting(const std::string& name, uint16_t port) {
+    ensure_winsock();
+
     fd_ = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd_ < 0) return false;
+    if (fd_ == SMOUSE_INVALID_SOCKET) return false;
 
     int opt = 1;
-    setsockopt(fd_, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
-    setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd_, SOL_SOCKET, SO_BROADCAST,
+               reinterpret_cast<const char*>(&opt), sizeof(opt));
+    setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&opt), sizeof(opt));
 
     running_ = true;
     thread_ = std::thread(&Discovery::broadcast_loop, this, name, port);
@@ -29,20 +29,23 @@ bool Discovery::start_broadcasting(const std::string& name, uint16_t port) {
 }
 
 bool Discovery::start_listening(DiscoveryCallback callback) {
+    ensure_winsock();
+
     fd_ = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd_ < 0) return false;
+    if (fd_ == SMOUSE_INVALID_SOCKET) return false;
 
     int opt = 1;
-    setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR,
+               reinterpret_cast<const char*>(&opt), sizeof(opt));
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(DISCOVERY_PORT);
 
-    if (::bind(fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (::bind(fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        net_close(fd_);
+        fd_ = SMOUSE_INVALID_SOCKET;
         return false;
     }
 
@@ -53,10 +56,10 @@ bool Discovery::start_listening(DiscoveryCallback callback) {
 
 void Discovery::stop() {
     running_ = false;
-    if (fd_ >= 0) {
-        ::shutdown(fd_, SHUT_RDWR);
-        ::close(fd_);
-        fd_ = -1;
+    if (fd_ != SMOUSE_INVALID_SOCKET) {
+        net_shutdown(fd_);
+        net_close(fd_);
+        fd_ = SMOUSE_INVALID_SOCKET;
     }
     if (thread_.joinable()) {
         thread_.join();
@@ -75,17 +78,17 @@ void Discovery::broadcast_loop(std::string name, uint16_t port) {
     broadcast_addr.sin_port = htons(DISCOVERY_PORT);
 
     // Packet format: MAGIC(4) + PORT(2) + NAME_LEN(1) + NAME
-    uint8_t packet[256];
-    packet[0] = (MAGIC >> 24) & 0xFF;
-    packet[1] = (MAGIC >> 16) & 0xFF;
-    packet[2] = (MAGIC >> 8) & 0xFF;
-    packet[3] = MAGIC & 0xFF;
-    packet[4] = (port >> 8) & 0xFF;
-    packet[5] = port & 0xFF;
-    uint8_t name_len = static_cast<uint8_t>(std::min(name.size(), size_t{248}));
-    packet[6] = name_len;
+    char packet[256];
+    packet[0] = static_cast<char>((MAGIC >> 24) & 0xFF);
+    packet[1] = static_cast<char>((MAGIC >> 16) & 0xFF);
+    packet[2] = static_cast<char>((MAGIC >> 8) & 0xFF);
+    packet[3] = static_cast<char>(MAGIC & 0xFF);
+    packet[4] = static_cast<char>((port >> 8) & 0xFF);
+    packet[5] = static_cast<char>(port & 0xFF);
+    uint8_t name_len = static_cast<uint8_t>((std::min)(name.size(), size_t{248}));
+    packet[6] = static_cast<char>(name_len);
     std::memcpy(packet + 7, name.data(), name_len);
-    size_t packet_size = 7 + name_len;
+    int packet_size = 7 + name_len;
 
     while (running_) {
         ::sendto(fd_, packet, packet_size, 0,
@@ -100,26 +103,27 @@ void Discovery::broadcast_loop(std::string name, uint16_t port) {
 }
 
 void Discovery::listen_loop(DiscoveryCallback callback) {
-    uint8_t buf[256];
+    char buf[256];
 
     while (running_) {
         struct sockaddr_in sender_addr{};
         socklen_t sender_len = sizeof(sender_addr);
 
-        ssize_t n = ::recvfrom(fd_, buf, sizeof(buf), 0,
+        int n = ::recvfrom(fd_, buf, sizeof(buf), 0,
             reinterpret_cast<struct sockaddr*>(&sender_addr), &sender_len);
 
         if (n < 7) continue;
 
         // Verify magic
-        uint32_t magic = (static_cast<uint32_t>(buf[0]) << 24) |
-                         (static_cast<uint32_t>(buf[1]) << 16) |
-                         (static_cast<uint32_t>(buf[2]) << 8) |
-                         static_cast<uint32_t>(buf[3]);
+        uint32_t magic = (static_cast<uint32_t>(static_cast<uint8_t>(buf[0])) << 24) |
+                         (static_cast<uint32_t>(static_cast<uint8_t>(buf[1])) << 16) |
+                         (static_cast<uint32_t>(static_cast<uint8_t>(buf[2])) << 8) |
+                         static_cast<uint32_t>(static_cast<uint8_t>(buf[3]));
         if (magic != MAGIC) continue;
 
-        uint16_t port = (static_cast<uint16_t>(buf[4]) << 8) | buf[5];
-        uint8_t name_len = buf[6];
+        uint16_t port = (static_cast<uint16_t>(static_cast<uint8_t>(buf[4])) << 8) |
+                        static_cast<uint8_t>(buf[5]);
+        uint8_t name_len = static_cast<uint8_t>(buf[6]);
         if (n < 7 + name_len) continue;
 
         char ip[INET_ADDRSTRLEN];
@@ -128,7 +132,7 @@ void Discovery::listen_loop(DiscoveryCallback callback) {
         DiscoveredServer server;
         server.host = ip;
         server.port = port;
-        server.name.assign(reinterpret_cast<char*>(buf + 7), name_len);
+        server.name.assign(buf + 7, name_len);
 
         // Deduplicate
         {

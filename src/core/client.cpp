@@ -1,5 +1,6 @@
 #include "client.h"
 #include <iostream>
+#include <sstream>
 
 namespace smouse {
 
@@ -7,6 +8,11 @@ Client::Client() = default;
 
 Client::~Client() {
     disconnect();
+}
+
+void Client::log(const std::string& message) {
+    std::cout << message << std::endl;
+    if (log_callback_) log_callback_(message);
 }
 
 bool Client::connect(const std::string& host, uint16_t tcp_port, uint16_t udp_port) {
@@ -19,15 +25,23 @@ bool Client::connect(const std::string& host, uint16_t tcp_port, uint16_t udp_po
     screen_query_ = create_screen_query();
     clipboard_monitor_ = create_clipboard_monitor();
 
-    if (!input_inject_ || !screen_query_) return false;
+    if (!input_inject_ || !screen_query_) {
+        log("[Client] Failed to create platform components");
+        return false;
+    }
 
     // Connect TCP
-    if (!tcp_.connect(host, tcp_port)) return false;
+    log("[Client] Connecting to " + host + ":" + std::to_string(tcp_port) + "...");
+    if (!tcp_.connect(host, tcp_port)) {
+        log("[Client] TCP connection failed");
+        return false;
+    }
 
     // Set up UDP
     if (!udp_.bind(udp_port)) {
         // Try ephemeral port if default is busy
         if (!udp_.bind(0)) {
+            log("[Client] UDP bind failed");
             tcp_.close();
             return false;
         }
@@ -68,7 +82,12 @@ bool Client::connect(const std::string& host, uint16_t tcp_port, uint16_t udp_po
 
     if (state_callback_) state_callback_(ClientState::CONNECTED);
 
-    std::cout << "[Client] Connected to " << host << ":" << tcp_port << std::endl;
+    {
+        std::ostringstream oss;
+        oss << "[Client] Connected to " << host << ":" << tcp_port
+            << " (screen: " << w << "x" << h << ")";
+        log(oss.str());
+    }
     return true;
 }
 
@@ -88,6 +107,7 @@ void Client::disconnect() {
 
     state_ = ClientState::DISCONNECTED;
     if (state_callback_) state_callback_(ClientState::DISCONNECTED);
+    log("[Client] Disconnected");
 }
 
 void Client::on_server_message(Message msg) {
@@ -95,9 +115,9 @@ void Client::on_server_message(Message msg) {
     case MessageType::HELLO_ACK: {
         auto& ack = std::get<HelloAck>(msg.payload);
         if (ack.accepted) {
-            std::cout << "[Client] Server accepted connection" << std::endl;
+            log("[Client] Server accepted connection");
         } else {
-            std::cout << "[Client] Server rejected connection" << std::endl;
+            log("[Client] Server rejected connection");
             disconnect();
         }
         break;
@@ -112,13 +132,17 @@ void Client::on_server_message(Message msg) {
             input_inject_->move_mouse(enter.x, enter.y);
         }
 
-        std::cout << "[Client] Screen entered at (" << enter.x << "," << enter.y << ")" << std::endl;
+        {
+            std::ostringstream oss;
+            oss << "[Client] Screen entered at (" << enter.x << "," << enter.y << ")";
+            log(oss.str());
+        }
         break;
     }
     case MessageType::SCREEN_LEAVE: {
         state_ = ClientState::CONNECTED;
         if (state_callback_) state_callback_(ClientState::CONNECTED);
-        std::cout << "[Client] Screen left" << std::endl;
+        log("[Client] Screen left");
         break;
     }
     case MessageType::CLIPBOARD_UPDATE: {
@@ -126,7 +150,7 @@ void Client::on_server_message(Message msg) {
         if (clipboard_monitor_) {
             clipboard_monitor_->set_content(cb.format, cb.data);
         }
-        std::cout << "[Client] Clipboard received (" << cb.data.size() << " bytes)" << std::endl;
+        log("[Client] Clipboard received (" + std::to_string(cb.data.size()) + " bytes)");
         break;
     }
     case MessageType::KEEPALIVE:
@@ -143,7 +167,7 @@ void Client::on_server_message(Message msg) {
 }
 
 void Client::on_server_disconnected() {
-    std::cout << "[Client] Server disconnected" << std::endl;
+    log("[Client] Server disconnected");
 
     state_ = ClientState::DISCONNECTED;
     if (state_callback_) state_callback_(ClientState::DISCONNECTED);
@@ -207,7 +231,7 @@ void Client::reconnect_loop() {
     constexpr int max_backoff_ms = 30000;
 
     while (running_ && auto_reconnect_ && state_ == ClientState::RECONNECTING) {
-        std::cout << "[Client] Attempting reconnect in " << backoff_ms << "ms..." << std::endl;
+        log("[Client] Attempting reconnect in " + std::to_string(backoff_ms) + "ms...");
         std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
 
         if (!running_ || !auto_reconnect_) break;
@@ -248,12 +272,12 @@ void Client::reconnect_loop() {
 
             state_ = ClientState::CONNECTED;
             if (state_callback_) state_callback_(ClientState::CONNECTED);
-            std::cout << "[Client] Reconnected!" << std::endl;
+            log("[Client] Reconnected!");
             return;
         }
 
         // Exponential backoff
-        backoff_ms = std::min(backoff_ms * 2, max_backoff_ms);
+        backoff_ms = (std::min)(backoff_ms * 2, max_backoff_ms);
     }
 }
 

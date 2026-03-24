@@ -6,3 +6,4 @@ compile_commands.json
 *.dylib
 *.dSYM/
 .DS_Store
+vcpkg/
