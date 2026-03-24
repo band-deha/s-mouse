@@ -17,6 +17,8 @@ public:
     void stop() override;
     void set_suppress(bool suppress) override;
     bool is_capturing() const override;
+    void set_escape_callback(std::function<void()> cb) override;
+
 
 private:
     static CGEventRef event_callback(
@@ -30,6 +32,7 @@ private:
     CFRunLoopRef run_loop_ = nullptr;
     std::thread tap_thread_;
     EventCallback callback_;
+    std::function<void()> escape_callback_;
     std::atomic<bool> capturing_{false};
     std::atomic<bool> suppress_{false};
 };

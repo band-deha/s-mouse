@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QMouseEvent>
 #include <algorithm>
+#include <cstdlib>
 
 namespace smouse {
 
@@ -198,10 +199,49 @@ void ScreenEditor::mouseMoveEvent(QMouseEvent* event) {
 void ScreenEditor::mouseReleaseEvent(QMouseEvent* event) {
     if (event->button() != Qt::LeftButton || dragging_index_ < 0) return;
 
-    screens_[dragging_index_].is_dragging = false;
+    auto& screen = screens_[dragging_index_];
+    screen.is_dragging = false;
+
+    // Detect which edge of server this client is now on
+    int edge = detect_edge(screen.rect);
+    emit client_edge_changed(screen.client_id, edge);
+
     dragging_index_ = -1;
     setCursor(Qt::ArrowCursor);
     emit layout_changed();
+}
+
+int ScreenEditor::detect_edge(const QRect& client_rect) const {
+    // Find the server screen
+    for (const auto& s : screens_) {
+        if (!s.is_server) continue;
+
+        int cx = client_rect.center().x();
+        int cy = client_rect.center().y();
+        int sx = s.rect.center().x();
+        int sy = s.rect.center().y();
+
+        int dx = cx - sx;
+        int dy = cy - sy;
+
+        // Determine dominant direction
+        if (std::abs(dx) >= std::abs(dy)) {
+            return dx < 0 ? 0 : 1;  // 0=LEFT, 1=RIGHT
+        } else {
+            return dy < 0 ? 2 : 3;  // 2=TOP, 3=BOTTOM
+        }
+    }
+    return 1; // default RIGHT
+}
+
+QString ScreenEditor::edge_name(int edge) {
+    switch (edge) {
+    case 0: return "LEFT";
+    case 1: return "RIGHT";
+    case 2: return "TOP";
+    case 3: return "BOTTOM";
+    default: return "RIGHT";
+    }
 }
 
 } // namespace smouse

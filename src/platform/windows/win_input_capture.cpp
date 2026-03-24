@@ -105,6 +105,18 @@ private:
     static LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam) {
         if (nCode == HC_ACTION && instance_ && instance_->callback_) {
             auto* kb = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+
+            // Scroll Lock = emergency escape hotkey (always goes back to local)
+            if (kb->vkCode == VK_SCROLL && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+                if (instance_->suppress_) {
+                    instance_->suppress_ = false;
+                    if (instance_->escape_callback_) {
+                        instance_->escape_callback_();
+                    }
+                    return 1; // consume the key
+                }
+            }
+
             uint16_t hid = win_vk_to_hid(static_cast<uint16_t>(kb->vkCode));
             uint32_t mods = win_mods_to_modifiers();
 
@@ -165,11 +177,16 @@ private:
         return CallNextHookEx(nullptr, nCode, wParam, lParam);
     }
 
+    void set_escape_callback(std::function<void()> cb) override {
+        escape_callback_ = std::move(cb);
+    }
+
     static inline WinInputCapture* instance_ = nullptr;
     HHOOK kb_hook_ = nullptr;
     HHOOK mouse_hook_ = nullptr;
     std::thread hook_thread_;
     EventCallback callback_;
+    std::function<void()> escape_callback_;
     std::atomic<bool> capturing_{false};
     std::atomic<bool> suppress_{false};
 };

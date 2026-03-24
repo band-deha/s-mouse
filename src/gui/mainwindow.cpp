@@ -123,6 +123,20 @@ void MainWindow::setup_ui() {
     screen_editor_ = new ScreenEditor(this);
     tab_widget_->addTab(screen_editor_, "Screen Arrangement");
 
+    // When user drags a client screen, update the server layout edge
+    QObject::connect(screen_editor_, &ScreenEditor::client_edge_changed,
+                     this, [this](const QString& client_id, int edge) {
+        if (server_) {
+            server_->layout().set_client_edge(
+                client_id.toStdString(),
+                static_cast<smouse::Edge>(edge));
+            QString edgeName = ScreenEditor::edge_name(edge);
+            emit log_message_received(
+                QString("[GUI] Client %1 moved to %2 edge of server")
+                    .arg(client_id, edgeName));
+        }
+    });
+
     // Log tab
     log_view_ = new QTextEdit(this);
     log_view_->setReadOnly(true);

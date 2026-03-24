@@ -52,6 +52,9 @@ public:
     void remove_client(const std::string& client_id);
     void clear_clients();
 
+    // Set which edge of the server a client is on
+    void set_client_edge(const std::string& client_id, Edge edge);
+
     // Check if a point hits any screen edge that has a client
     // Returns the client_id if the cursor should transition
     std::optional<std::string> check_edge(int32_t x, int32_t y) const;

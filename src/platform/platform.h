@@ -27,6 +27,9 @@ public:
 
     // Check if capturing
     virtual bool is_capturing() const = 0;
+
+    // Set callback for emergency escape (e.g. Scroll Lock key)
+    virtual void set_escape_callback(std::function<void()> cb) = 0;
 };
 
 // Abstract interface for injecting synthetic input events

@@ -66,6 +66,12 @@ bool Server::start(uint16_t tcp_port, uint16_t udp_port) {
         return false;
     }
 
+    // Set escape hotkey (Scroll Lock) to return to local
+    input_capture_->set_escape_callback([this]() {
+        log("[Server] Escape hotkey pressed - switching to local");
+        transition_to_local();
+    });
+
     // Start input capture
     if (!input_capture_->start([this](Message msg) {
         on_input_event(std::move(msg));
@@ -112,8 +118,6 @@ void Server::stop() {
 }
 
 void Server::on_client_connected(TcpConnection conn, std::string peer_addr) {
-    // Wait for HELLO message from client
-    // For now, generate a client_id from the peer address
     std::string client_id = peer_addr;
 
     auto client = std::make_unique<ClientConnection>();
@@ -148,6 +152,12 @@ void Server::on_client_connected(TcpConnection conn, std::string peer_addr) {
 }
 
 void Server::on_client_message(const std::string& client_id, Message msg) {
+    // Handle DISCONNECT outside the lock to avoid deadlock
+    if (msg.header.type == MessageType::DISCONNECT) {
+        on_client_disconnected(client_id);
+        return;
+    }
+
     std::lock_guard lock(clients_mutex_);
     auto it = clients_.find(client_id);
     if (it == clients_.end()) return;
@@ -184,9 +194,6 @@ void Server::on_client_message(const std::string& client_id, Message msg) {
     case MessageType::KEEPALIVE:
         // Already updated last_keepalive above
         break;
-    case MessageType::DISCONNECT:
-        on_client_disconnected(client_id);
-        break;
     default:
         break;
     }
@@ -209,12 +216,22 @@ void Server::on_client_disconnected(const std::string& client_id) {
     layout_.remove_client(client_id);
 
     if (was_active) {
-        transition_to_local();
+        // Inline transition_to_local logic to avoid deadlock
+        if (input_capture_) {
+            input_capture_->set_suppress(false);
+        }
+        active_client_id_.clear();
+        state_ = ServerState::LOCAL_ACTIVE;
+
+        if (state_callback_) {
+            state_callback_(ServerState::LOCAL_ACTIVE, "");
+        }
+        log("[Server] Switched to local (client disconnected)");
     }
 
     log("[Server] Client disconnected: " + (name.empty() ? client_id : name));
 
-    // Notify GUI
+    // Notify GUI to update screen arrangement
     if (state_callback_) {
         state_callback_(state_, client_id);
     }

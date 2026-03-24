@@ -1,5 +1,6 @@
 #include "screen_layout.h"
 #include <algorithm>
+#include <cmath>
 
 namespace smouse {
 
@@ -10,7 +11,17 @@ void ScreenLayout::set_server_screen(const ScreenRect& rect) {
 void ScreenLayout::add_client(const ScreenInfo& info) {
     // Replace if client_id already exists
     remove_client(info.client_id);
-    clients_.push_back(info);
+
+    // Auto-detect adjacent edge if not explicitly set:
+    // Place on RIGHT by default (most common physical setup)
+    ScreenInfo client_info = info;
+    if (client_info.adjacent_edge == Edge::LEFT &&
+        client_info.rect.x == 0 && client_info.rect.y == 0) {
+        // Default: place on RIGHT edge of server
+        client_info.adjacent_edge = Edge::RIGHT;
+    }
+
+    clients_.push_back(client_info);
 }
 
 void ScreenLayout::remove_client(const std::string& client_id) {
@@ -22,6 +33,15 @@ void ScreenLayout::remove_client(const std::string& client_id) {
 
 void ScreenLayout::clear_clients() {
     clients_.clear();
+}
+
+void ScreenLayout::set_client_edge(const std::string& client_id, Edge edge) {
+    for (auto& c : clients_) {
+        if (c.client_id == client_id) {
+            c.adjacent_edge = edge;
+            return;
+        }
+    }
 }
 
 std::optional<std::string> ScreenLayout::check_edge(int32_t x, int32_t y) const {

@@ -27,8 +27,13 @@ public:
     void remove_client(const QString& client_id);
     void clear();
 
+    // Determine which edge of server a client screen is on, based on position
+    static QString edge_name(int edge);
+    int detect_edge(const QRect& client_rect) const;
+
 signals:
     void layout_changed();
+    void client_edge_changed(const QString& client_id, int edge);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

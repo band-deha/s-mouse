@@ -268,6 +268,10 @@ bool MacOSInputCapture::is_capturing() const {
     return capturing_;
 }
 
+void MacOSInputCapture::set_escape_callback(std::function<void()> cb) {
+    escape_callback_ = std::move(cb);
+}
+
 CGEventRef MacOSInputCapture::event_callback(
     CGEventTapProxy /*proxy*/, CGEventType type,
     CGEventRef event, void* refcon) {
@@ -351,6 +355,14 @@ CGEventRef MacOSInputCapture::handle_event(CGEventType type, CGEventRef event) {
     case kCGEventKeyDown: {
         uint16_t vk = static_cast<uint16_t>(
             CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode));
+
+        // F15 (0x71) = Scroll Lock equivalent on Mac - emergency escape
+        if (vk == 0x71 && suppress_) {
+            suppress_ = false;
+            if (escape_callback_) escape_callback_();
+            return nullptr; // consume key
+        }
+
         uint16_t hid = macos_vk_to_hid(vk);
         uint32_t mods = cg_flags_to_modifiers(CGEventGetFlags(event));
         callback_(make_message(KeyDown{hid, mods}));
